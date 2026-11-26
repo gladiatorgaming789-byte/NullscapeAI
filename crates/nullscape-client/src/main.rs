@@ -61,8 +61,8 @@ fn input_system(keys: Res<ButtonInput<KeyCode>>, mut sim: ResMut<SimResource>) {
 
 fn sync_visuals(
     sim: Res<SimResource>,
-    mut agents: Query<(&AgentVisual, &mut Transform)>,
-    mut enemies: Query<(&EnemyVisual, &mut Transform)>,
+    mut agents: Query<(&AgentVisual, &mut Transform), Without<EnemyVisual>>,
+    mut enemies: Query<(&EnemyVisual, &mut Transform), Without<AgentVisual>>,
 ) {
     for (v, mut t) in &mut agents {
         if let Some(a) = sim.0.agents.get(&v.0) { t.translation = a.position; }
