@@ -34,6 +34,6 @@ pub struct EnemyObservation {
     pub hostile: bool,
 }
 
-impl From<Vec3> for [f32; 3] {
-    fn from(v: Vec3) -> Self { [v.x, v.y, v.z] }
+pub fn vec3_to_array(v: Vec3) -> [f32; 3] {
+    [v.x, v.y, v.z]
 }

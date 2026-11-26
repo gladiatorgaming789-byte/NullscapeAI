@@ -1,4 +1,4 @@
-use crate::{api::{Action, AgentId, EnemyObservation, Observation}, enemy::{Enemy, EnemyState}, math::horizontal, world::World};
+use crate::{api::{vec3_to_array, Action, AgentId, EnemyObservation, Observation}, enemy::{Enemy, EnemyState}, math::horizontal, world::World};
 use glam::{Vec3, EulerRot, Quat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -109,7 +109,7 @@ impl Simulation {
                 .filter(|e| e.state != EnemyState::Dead)
                 .map(|e| EnemyObservation {
                     id: e.id,
-                    position: e.position.into(),
+                    position: vec3_to_array(e.position),
                     health: e.health,
                     distance: e.position.distance(agent.position),
                     hostile: true,
@@ -121,8 +121,8 @@ impl Simulation {
             Observation {
                 tick: self.tick,
                 agent_id: agent.id,
-                position: agent.position.into(),
-                velocity: agent.velocity.into(),
+                position: vec3_to_array(agent.position),
+                velocity: vec3_to_array(agent.velocity),
                 yaw: agent.yaw,
                 health: agent.health,
                 on_ground: agent.on_ground,

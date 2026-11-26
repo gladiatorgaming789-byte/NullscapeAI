@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{FloatExt, Vec3};
 use noise::{NoiseFn, Perlin};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
