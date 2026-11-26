@@ -54,6 +54,7 @@ impl Simulation {
     pub fn step(&mut self, actions: &HashMap<AgentId, Action>) -> Vec<Observation> {
         let dt = self.config.fixed_dt;
         let targets: HashMap<AgentId, Vec3> = self.agents.iter().map(|(&id, a)| (id, a.position)).collect();
+
         for agent in self.agents.values_mut() {
             let action = actions.get(&agent.id).copied().unwrap_or_default();
             agent.yaw += action.yaw_delta;
@@ -62,15 +63,22 @@ impl Simulation {
             let wish = horizontal(rotation * input).normalize_or_zero();
             agent.velocity.x = wish.x * self.config.move_speed;
             agent.velocity.z = wish.z * self.config.move_speed;
-            if action.jump && agent.on_ground { agent.velocity.y = self.config.jump_speed; agent.on_ground = false; }
+
+            if action.jump && agent.on_ground {
+                agent.velocity.y = self.config.jump_speed;
+                agent.on_ground = false;
+            }
+
             agent.velocity.y -= self.config.gravity * dt;
             agent.position += agent.velocity * dt;
+
             let ground = self.world.height_at(agent.position.x, agent.position.z) + 1.0;
             if agent.position.y <= ground {
                 agent.position.y = ground;
                 agent.velocity.y = 0.0;
                 agent.on_ground = true;
             }
+
             if action.attack {
                 for enemy in &mut self.enemies {
                     if enemy.state != EnemyState::Dead && enemy.position.distance(agent.position) <= 2.5 {
@@ -96,16 +104,36 @@ impl Simulation {
     }
 
     pub fn observations(&self) -> Vec<Observation> {
-        self.agents.values().map(|agent| {
-            let nearby_enemies = self.enemies.iter().filter(|e| e.state != EnemyState::Dead).map(|e| EnemyObservation {
-                id: e.id,
-                position: e.position.into(),
-                health: e.health,
-                distance: e.position.distance(agent.position),
-                hostile: true,
-            }).filter(|e| e.distance <= 25.0).collect();
-            Observation { tick: self.tick, agent_id: agent.id, position: agent.position.into(), velocity: agent.velocity.into(), yaw: agent.yaw, health: agent.health, on_ground: agent.on_ground, nearby_enemies, terrain_height: self.terrain_height(agent.position.x, agent.position.z) }
-        }).collect()
+        let mut observations: Vec<Observation> = self.agents.values().map(|agent| {
+            let mut nearby_enemies: Vec<EnemyObservation> = self.enemies.iter()
+                .filter(|e| e.state != EnemyState::Dead)
+                .map(|e| EnemyObservation {
+                    id: e.id,
+                    position: e.position.into(),
+                    health: e.health,
+                    distance: e.position.distance(agent.position),
+                    hostile: true,
+                })
+                .filter(|e| e.distance <= 25.0)
+                .collect();
+            nearby_enemies.sort_by_key(|e| e.id);
+
+            Observation {
+                tick: self.tick,
+                agent_id: agent.id,
+                position: agent.position.into(),
+                velocity: agent.velocity.into(),
+                yaw: agent.yaw,
+                health: agent.health,
+                on_ground: agent.on_ground,
+                nearby_enemies,
+                terrain_height: self.terrain_height(agent.position.x, agent.position.z),
+            }
+        }).collect();
+
+        // HashMap iteration order is randomized. Sorting makes replay fingerprints stable.
+        observations.sort_by_key(|o| o.agent_id);
+        observations
     }
 
     fn terrain_height(&self, x: f32, z: f32) -> f32 {
