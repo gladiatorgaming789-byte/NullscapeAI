@@ -1,21 +1,18 @@
-use nullscape_core::{Action, Simulation, SimulationConfig};
-use std::collections::HashMap;
+use nullscape_core::{protocol::handle_line, Simulation, SimulationConfig};
 use std::io::{self, BufRead, Write};
 
+/// Reads one JSON request per line on stdin and writes exactly one JSON
+/// response per line on stdout. See `nullscape_core::protocol` for the format.
 fn main() {
     let mut sim = Simulation::new(SimulationConfig::default());
     let stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
-        let line = match line { Ok(v) => v, Err(_) => break };
-        if line.trim().is_empty() { continue; }
-        let raw: HashMap<String, Action> = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => { eprintln!("invalid action JSON: {e}"); continue; }
-        };
-        let actions = raw.into_iter().filter_map(|(k, v)| k.parse::<u32>().ok().map(|id| (id, v))).collect();
-        let obs = sim.step(&actions);
-        writeln!(stdout, "{}", serde_json::to_string(&obs).expect("serialize")).expect("stdout");
-        stdout.flush().expect("flush");
+        let Ok(line) = line else { break };
+        let response = handle_line(&mut sim, &line);
+        // A closed pipe means the client went away; exit quietly instead of panicking.
+        if writeln!(stdout, "{response}").and_then(|_| stdout.flush()).is_err() {
+            break;
+        }
     }
 }

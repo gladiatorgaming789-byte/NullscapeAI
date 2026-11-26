@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
 
 pub type AgentId = u32;
 
+/// A single agent's input for one tick.
+///
+/// Every field is optional on the wire (`{"jump": true}` is valid and means
+/// "jump, everything else neutral"), but unknown fields are rejected so a typo
+/// like `"jmp"` is reported instead of silently ignored.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Action {
     pub move_x: f32,
     pub move_z: f32,

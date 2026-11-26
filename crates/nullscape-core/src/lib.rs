@@ -1,6 +1,7 @@
 pub mod api;
 pub mod enemy;
 pub mod math;
+pub mod protocol;
 pub mod simulation;
 pub mod world;
 

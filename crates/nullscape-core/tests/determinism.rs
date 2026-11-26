@@ -19,8 +19,8 @@ fn same_seed_and_actions_are_identical() {
 
 #[test]
 fn different_seeds_change_terrain() {
-    let mut a = Simulation::new(SimulationConfig { seed: 1, ..Default::default() });
-    let mut b = Simulation::new(SimulationConfig { seed: 2, ..Default::default() });
+    let a = Simulation::new(SimulationConfig { seed: 1, ..Default::default() });
+    let b = Simulation::new(SimulationConfig { seed: 2, ..Default::default() });
     let ha = a.world.height_at(12.5, -7.25);
     let hb = b.world.height_at(12.5, -7.25);
     assert_ne!(ha, hb);

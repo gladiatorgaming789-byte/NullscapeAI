@@ -41,40 +41,46 @@ impl World {
         self.chunks.retain(|(x, z), _| (x - cx).abs() <= r && (z - cz).abs() <= r);
     }
 
+    /// Terrain height at an integer lattice point. This is the single source of
+    /// truth for terrain: chunk generation and `height_at` both sample it, so
+    /// the surface cannot disagree with itself across chunk borders.
+    fn corner_height(&self, ix: i32, iz: i32) -> f32 {
+        let wx = ix as f64;
+        let wz = iz as f64;
+        let base = self.noise.get([wx * WORLD_SCALE, wz * WORLD_SCALE]) as f32;
+        let detail = self.noise.get([wx * WORLD_SCALE * 3.0, wz * WORLD_SCALE * 3.0]) as f32;
+        (base * 0.7 + detail * 0.3) * HEIGHT_SCALE
+    }
+
     fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
         let mut heights = vec![0.0; (CHUNK_SIZE * CHUNK_SIZE) as usize];
         for z in 0..CHUNK_SIZE {
             for x in 0..CHUNK_SIZE {
-                let wx = (cx * CHUNK_SIZE + x) as f64;
-                let wz = (cz * CHUNK_SIZE + z) as f64;
-                let base = self.noise.get([wx * WORLD_SCALE, wz * WORLD_SCALE]) as f32;
-                let detail = self.noise.get([wx * WORLD_SCALE * 3.0, wz * WORLD_SCALE * 3.0]) as f32;
-                heights[(z * CHUNK_SIZE + x) as usize] = (base * 0.7 + detail * 0.3) * HEIGHT_SCALE;
+                heights[(z * CHUNK_SIZE + x) as usize] =
+                    self.corner_height(cx * CHUNK_SIZE + x, cz * CHUNK_SIZE + z);
             }
         }
         Chunk { coord: (cx, cz), heights }
     }
 
-    pub fn height_at(&mut self, x: f32, z: f32) -> f32 {
-        let cx = (x / CHUNK_SIZE as f32).floor() as i32;
-        let cz = (z / CHUNK_SIZE as f32).floor() as i32;
-        let lx = x - cx as f32 * CHUNK_SIZE as f32;
-        let lz = z - cz as f32 * CHUNK_SIZE as f32;
-        if !self.chunks.contains_key(&(cx, cz)) {
-            let chunk = self.generate_chunk(cx, cz);
-            self.chunks.insert((cx, cz), chunk);
-        }
-        let chunk = self.chunks.get(&(cx, cz)).expect("chunk exists");
-        let x0 = lx.floor().clamp(0.0, (CHUNK_SIZE - 1) as f32) as usize;
-        let z0 = lz.floor().clamp(0.0, (CHUNK_SIZE - 1) as f32) as usize;
-        let x1 = (x0 + 1).min((CHUNK_SIZE - 1) as usize);
-        let z1 = (z0 + 1).min((CHUNK_SIZE - 1) as usize);
-        let tx = lx.fract();
-        let tz = lz.fract();
-        let h00 = chunk.heights[z0 * CHUNK_SIZE as usize + x0];
-        let h10 = chunk.heights[z0 * CHUNK_SIZE as usize + x1];
-        let h01 = chunk.heights[z1 * CHUNK_SIZE as usize + x0];
-        let h11 = chunk.heights[z1 * CHUNK_SIZE as usize + x1];
+    /// Bilinearly interpolated terrain height.
+    ///
+    /// Samples the four surrounding lattice corners directly instead of
+    /// reading a cached chunk, so the surface is continuous across chunk
+    /// borders. It needs no chunk cache, which makes it `&self`, cheap
+    /// (4 corner samples instead of generating a 32x32 chunk), and free of
+    /// side effects on the streaming state.
+    pub fn height_at(&self, x: f32, z: f32) -> f32 {
+        let fx = x.floor();
+        let fz = z.floor();
+        let tx = x - fx;
+        let tz = z - fz;
+        let ix = fx as i32;
+        let iz = fz as i32;
+        let h00 = self.corner_height(ix, iz);
+        let h10 = self.corner_height(ix.saturating_add(1), iz);
+        let h01 = self.corner_height(ix, iz.saturating_add(1));
+        let h11 = self.corner_height(ix.saturating_add(1), iz.saturating_add(1));
         h00.lerp(h10, tx).lerp(h01.lerp(h11, tx), tz)
     }
 

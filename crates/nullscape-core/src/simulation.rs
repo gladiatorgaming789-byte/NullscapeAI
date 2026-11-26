@@ -3,6 +3,10 @@ use glam::{Vec3, EulerRot, Quat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// How far above the terrain surface a descending agent still counts as
+/// standing on it. Lets agents walk down slopes without flickering airborne.
+const GROUND_SNAP: f32 = 0.1;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct SimulationConfig {
     pub seed: u32,
@@ -40,7 +44,7 @@ pub struct Simulation {
 
 impl Simulation {
     pub fn new(config: SimulationConfig) -> Self {
-        let mut world = World::new(config.seed, 2);
+        let world = World::new(config.seed, 2);
         let mut agents = HashMap::new();
         for id in 0..config.agent_count {
             let x = id as f32 * 3.0;
@@ -72,11 +76,19 @@ impl Simulation {
             agent.velocity.y -= self.config.gravity * dt;
             agent.position += agent.velocity * dt;
 
+            // `on_ground` is recomputed every tick. Previously it was only ever
+            // cleared by jumping, so walking off a ledge left it stuck at true
+            // (air-jumps, wrong observations).
             let ground = self.world.height_at(agent.position.x, agent.position.z) + 1.0;
-            if agent.position.y <= ground {
+            let penetrating = agent.position.y <= ground;
+            let resting_or_descending_near_ground =
+                agent.velocity.y <= 0.0 && agent.position.y <= ground + GROUND_SNAP;
+            if penetrating || resting_or_descending_near_ground {
                 agent.position.y = ground;
                 agent.velocity.y = 0.0;
                 agent.on_ground = true;
+            } else {
+                agent.on_ground = false;
             }
 
             if action.attack {
@@ -137,8 +149,7 @@ impl Simulation {
     }
 
     fn terrain_height(&self, x: f32, z: f32) -> f32 {
-        let mut world = World::new(self.config.seed, 0);
-        world.height_at(x, z)
+        self.world.height_at(x, z)
     }
 
     pub fn deterministic_fingerprint(&self) -> String {

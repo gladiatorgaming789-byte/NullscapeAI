@@ -36,7 +36,25 @@ Build the headless binary:
 
 cargo build -p nullscape-core --bin nullscape-headless
 
-Then use agents/environment.py from Python. The simulation accepts one JSON action object per tick and returns observations for all agents.
+Then use agents/environment.py from Python:
+
+```python
+from agents.environment import NullscapeEnv
+
+with NullscapeEnv() as env:
+    obs = env.step({0: {"move_z": -1.0, "jump": True}})  # unspecified fields default to neutral
+    obs = env.reset(seed=42)                              # restart, optionally with a new seed
+```
+
+The wire protocol is JSONL with a strict **one response line per request line**:
+
+| Request | Response |
+|---|---|
+| `{"0": {"move_z": -1.0, "jump": true}, "1": {}}` | JSON array of observations (all agents, sorted by id). Action fields are all optional; omitted agents idle; `{}` advances one tick. |
+| `{"cmd": "reset"}` / `{"cmd": "reset", "seed": 42}` | Tick-0 observations of a restarted simulation. |
+| anything invalid (bad JSON, unknown agent id, unknown field, wrong type, ...) | `{"error": "<message>"}`; the simulation is **not** advanced. |
+
+Unknown fields are rejected on purpose so typos like `"jmp"` are reported rather than ignored.
 
 The current enemy targets agent 0. Agent 1 is independently simulated and shares the same world.
 

@@ -1,0 +1,813 @@
+From ab54d25df9d5f693fe5637bd89199974d7f29c19 Mon Sep 17 00:00:00 2001
+From: pr <a@b.c>
+Date: Thu, 26 Nov 2026 23:14:13 +0000
+Subject: [PATCH] Fix terrain seams and on_ground; harden headless protocol
+
+Terrain
+- height_at now samples the four surrounding lattice corners directly
+  instead of interpolating inside a cached chunk. Previously the last cell
+  of every chunk was not interpolated towards its neighbour, producing a
+  ~1.0 unit cliff at every chunk border (up to ~1.7 on some seeds).
+- Chunk generation and height_at share one corner sampler, so they cannot
+  disagree. height_at is now &self, has no side effects on the chunk cache
+  (this also stops chunk thrash for agents outside agent 0's stream area),
+  and no longer panics on extreme coordinates.
+- Simulation::terrain_height reuses the world instead of building a new
+  Perlin + generating a whole chunk per agent per observation:
+  observations() ~1.9 ms -> ~0.007 ms, step() ~2.1 ms -> ~0.13 ms (debug).
+
+Grounding
+- on_ground is recomputed every tick. It was only ever cleared by jumping,
+  so walking off a ledge left it true: mid-air jumps and wrong observations.
+- Added a small GROUND_SNAP so walking down slopes does not flicker
+  airborne; penetrating the terrain still clamps as before.
+
+Headless protocol
+- Action is #[serde(default, deny_unknown_fields)]: {"jump":true} is valid,
+  typos such as "jmp" are reported instead of ignored.
+- New protocol module with a strict invariant: exactly one response line per
+  request line. Invalid input returns {"error": "..."} and never advances the
+  simulation. Previously the binary logged to stderr and sent nothing, which
+  hung the Python client forever on readline().
+- New {"cmd":"reset"[, "seed":N]} command.
+- Successful responses are byte-identical to the old format.
+- Python client: raises NullscapeError, adds reset(), context manager,
+  .exe default on Windows, waits for the child on close().
+
+Tests: terrain continuity, chunk/height consistency, grounding, protocol
+(including an end-to-end test of the real binary), Python client.
+---
+ README.md                                     |  20 ++-
+ agents/__init__.py                            |   0
+ agents/environment.py                         |  59 ++++++-
+ agents/test_environment.py                    |  33 ++++
+ crates/nullscape-core/src/api.rs              |   6 +
+ .../src/bin/nullscape-headless.rs             |  23 ++-
+ crates/nullscape-core/src/lib.rs              |   1 +
+ crates/nullscape-core/src/protocol.rs         |  86 ++++++++++
+ crates/nullscape-core/src/simulation.rs       |  19 ++-
+ crates/nullscape-core/src/world.rs            |  56 ++++---
+ crates/nullscape-core/tests/determinism.rs    |   4 +-
+ crates/nullscape-core/tests/grounding.rs      |  59 +++++++
+ crates/nullscape-core/tests/protocol.rs       | 147 ++++++++++++++++++
+ crates/nullscape-core/tests/terrain.rs        |  59 +++++++
+ 14 files changed, 520 insertions(+), 52 deletions(-)
+ create mode 100644 agents/__init__.py
+ create mode 100644 agents/test_environment.py
+ create mode 100644 crates/nullscape-core/src/protocol.rs
+ create mode 100644 crates/nullscape-core/tests/grounding.rs
+ create mode 100644 crates/nullscape-core/tests/protocol.rs
+ create mode 100644 crates/nullscape-core/tests/terrain.rs
+
+diff --git a/README.md b/README.md
+index c05c5c2..a9fd628 100644
+--- a/README.md
++++ b/README.md
+@@ -36,7 +36,25 @@ Build the headless binary:
+ 
+ cargo build -p nullscape-core --bin nullscape-headless
+ 
+-Then use agents/environment.py from Python. The simulation accepts one JSON action object per tick and returns observations for all agents.
++Then use agents/environment.py from Python:
++
++```python
++from agents.environment import NullscapeEnv
++
++with NullscapeEnv() as env:
++    obs = env.step({0: {"move_z": -1.0, "jump": True}})  # unspecified fields default to neutral
++    obs = env.reset(seed=42)                              # restart, optionally with a new seed
++```
++
++The wire protocol is JSONL with a strict **one response line per request line**:
++
++| Request | Response |
++|---|---|
++| `{"0": {"move_z": -1.0, "jump": true}, "1": {}}` | JSON array of observations (all agents, sorted by id). Action fields are all optional; omitted agents idle; `{}` advances one tick. |
++| `{"cmd": "reset"}` / `{"cmd": "reset", "seed": 42}` | Tick-0 observations of a restarted simulation. |
++| anything invalid (bad JSON, unknown agent id, unknown field, wrong type, ...) | `{"error": "<message>"}`; the simulation is **not** advanced. |
++
++Unknown fields are rejected on purpose so typos like `"jmp"` are reported rather than ignored.
+ 
+ The current enemy targets agent 0. Agent 1 is independently simulated and shares the same world.
+ 
+diff --git a/agents/__init__.py b/agents/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/agents/environment.py b/agents/environment.py
+index caf1c88..98e1896 100644
+--- a/agents/environment.py
++++ b/agents/environment.py
+@@ -1,32 +1,77 @@
+-"""JSONL client for the headless Nullscape environment."""
++"""JSONL client for the headless Nullscape environment.
++
++Protocol (see ``crates/nullscape-core/src/protocol.rs``): every request line
++gets exactly one response line. A failed request raises :class:`NullscapeError`
++and leaves the simulation untouched, so the client can keep using the same
++environment afterwards.
++"""
+ from __future__ import annotations
++
+ import json
++import os
+ import subprocess
+ from pathlib import Path
+ 
++
++class NullscapeError(RuntimeError):
++    """The environment rejected a request (bad JSON, unknown agent, bad field...)."""
++
++
+ class NullscapeEnv:
+-    def __init__(self, executable: str = "target/debug/nullscape-headless"):
++    def __init__(self, executable: str | os.PathLike | None = None):
++        root = Path(__file__).resolve().parents[1]
++        if executable is None:
++            name = "nullscape-headless" + (".exe" if os.name == "nt" else "")
++            executable = root / "target" / "debug" / name
+         self.process = subprocess.Popen(
+-            [executable],
++            [str(executable)],
+             stdin=subprocess.PIPE,
+             stdout=subprocess.PIPE,
+             text=True,
+-            cwd=Path(__file__).resolve().parents[1],
++            cwd=root,
+             bufsize=1,
+         )
+ 
+-    def step(self, actions: dict[int, dict]) -> list[dict]:
++    def _request(self, payload: dict) -> list[dict]:
+         if not self.process.stdin or not self.process.stdout:
+             raise RuntimeError("environment process is not running")
+-        payload = {str(k): v for k, v in actions.items()}
++        if self.process.poll() is not None:
++            raise RuntimeError("environment exited unexpectedly")
+         self.process.stdin.write(json.dumps(payload) + "\n")
+         self.process.stdin.flush()
+         line = self.process.stdout.readline()
+         if not line:
+             raise RuntimeError("environment exited unexpectedly")
+-        return json.loads(line)
++        data = json.loads(line)
++        if isinstance(data, dict) and "error" in data:
++            raise NullscapeError(data["error"])
++        return data
++
++    def step(self, actions: dict[int, dict]) -> list[dict]:
++        """Advance one tick. Action dicts may omit any field (``{"jump": True}``)."""
++        return self._request({str(k): v for k, v in actions.items()})
++
++    def reset(self, seed: int | None = None) -> list[dict]:
++        """Restart the simulation (optionally with a new terrain seed); returns tick-0 observations."""
++        payload: dict = {"cmd": "reset"}
++        if seed is not None:
++            payload["seed"] = seed
++        return self._request(payload)
+ 
+     def close(self) -> None:
+         if self.process.stdin:
+             self.process.stdin.close()
+         self.process.terminate()
++        try:
++            self.process.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            self.process.kill()
++            self.process.wait()
++        if self.process.stdout:
++            self.process.stdout.close()
++
++    def __enter__(self) -> "NullscapeEnv":
++        return self
++
++    def __exit__(self, *exc_info) -> None:
++        self.close()
+diff --git a/agents/test_environment.py b/agents/test_environment.py
+new file mode 100644
+index 0000000..3a1f65b
+--- /dev/null
++++ b/agents/test_environment.py
+@@ -0,0 +1,33 @@
++"""Run with: python -m unittest agents.test_environment  (after building the headless binary)."""
++import os
++import unittest
++from pathlib import Path
++
++from agents.environment import NullscapeEnv, NullscapeError
++
++_EXE = Path(__file__).resolve().parents[1] / "target" / "debug" / (
++    "nullscape-headless" + (".exe" if os.name == "nt" else ""))
++
++
++@unittest.skipUnless(_EXE.exists(), "build first: cargo build -p nullscape-core --bin nullscape-headless")
++class EnvTests(unittest.TestCase):
++    def test_partial_action_and_errors_do_not_desync(self):
++        with NullscapeEnv() as env:
++            self.assertEqual(env.step({0: {"jump": True}})[0]["tick"], 1)  # partial action
++            with self.assertRaises(NullscapeError):
++                env.step({0: {"jmp": True}})  # typo -> error, not a hang
++            with self.assertRaises(NullscapeError):
++                env.step({9: {}})  # unknown agent
++            self.assertEqual(env.step({})[0]["tick"], 2)  # still in sync, tick not advanced by errors
++
++    def test_reset(self):
++        with NullscapeEnv() as env:
++            for _ in range(5):
++                env.step({0: {"move_z": -1.0}})
++            obs = env.reset(seed=7)
++            self.assertEqual(obs[0]["tick"], 0)
++            self.assertEqual(env.step({})[0]["tick"], 1)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/crates/nullscape-core/src/api.rs b/crates/nullscape-core/src/api.rs
+index b824f76..4a0fcba 100644
+--- a/crates/nullscape-core/src/api.rs
++++ b/crates/nullscape-core/src/api.rs
+@@ -3,7 +3,13 @@ use serde::{Deserialize, Serialize};
+ 
+ pub type AgentId = u32;
+ 
++/// A single agent's input for one tick.
++///
++/// Every field is optional on the wire (`{"jump": true}` is valid and means
++/// "jump, everything else neutral"), but unknown fields are rejected so a typo
++/// like `"jmp"` is reported instead of silently ignored.
+ #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
++#[serde(default, deny_unknown_fields)]
+ pub struct Action {
+     pub move_x: f32,
+     pub move_z: f32,
+diff --git a/crates/nullscape-core/src/bin/nullscape-headless.rs b/crates/nullscape-core/src/bin/nullscape-headless.rs
+index 2613464..6746dee 100644
+--- a/crates/nullscape-core/src/bin/nullscape-headless.rs
++++ b/crates/nullscape-core/src/bin/nullscape-headless.rs
+@@ -1,21 +1,18 @@
+-use nullscape_core::{Action, Simulation, SimulationConfig};
+-use std::collections::HashMap;
++use nullscape_core::{protocol::handle_line, Simulation, SimulationConfig};
+ use std::io::{self, BufRead, Write};
+ 
++/// Reads one JSON request per line on stdin and writes exactly one JSON
++/// response per line on stdout. See `nullscape_core::protocol` for the format.
+ fn main() {
+     let mut sim = Simulation::new(SimulationConfig::default());
+     let stdin = io::stdin();
+-    let mut stdout = io::stdout();
++    let mut stdout = io::stdout().lock();
+     for line in stdin.lock().lines() {
+-        let line = match line { Ok(v) => v, Err(_) => break };
+-        if line.trim().is_empty() { continue; }
+-        let raw: HashMap<String, Action> = match serde_json::from_str(&line) {
+-            Ok(v) => v,
+-            Err(e) => { eprintln!("invalid action JSON: {e}"); continue; }
+-        };
+-        let actions = raw.into_iter().filter_map(|(k, v)| k.parse::<u32>().ok().map(|id| (id, v))).collect();
+-        let obs = sim.step(&actions);
+-        writeln!(stdout, "{}", serde_json::to_string(&obs).expect("serialize")).expect("stdout");
+-        stdout.flush().expect("flush");
++        let Ok(line) = line else { break };
++        let response = handle_line(&mut sim, &line);
++        // A closed pipe means the client went away; exit quietly instead of panicking.
++        if writeln!(stdout, "{response}").and_then(|_| stdout.flush()).is_err() {
++            break;
++        }
+     }
+ }
+diff --git a/crates/nullscape-core/src/lib.rs b/crates/nullscape-core/src/lib.rs
+index 4347b1a..ab47ec3 100644
+--- a/crates/nullscape-core/src/lib.rs
++++ b/crates/nullscape-core/src/lib.rs
+@@ -1,6 +1,7 @@
+ pub mod api;
+ pub mod enemy;
+ pub mod math;
++pub mod protocol;
+ pub mod simulation;
+ pub mod world;
+ 
+diff --git a/crates/nullscape-core/src/protocol.rs b/crates/nullscape-core/src/protocol.rs
+new file mode 100644
+index 0000000..d467458
+--- /dev/null
++++ b/crates/nullscape-core/src/protocol.rs
+@@ -0,0 +1,86 @@
++//! JSONL request/response protocol used by the headless binary.
++//!
++//! Invariant: **every request line produces exactly one response line.**
++//! Clients can therefore block on one `readline()` per request without risk of
++//! desynchronising, even when they send something invalid.
++//!
++//! Requests (one JSON object per line):
++//! - Actions: `{"0": {"move_z": -1.0, "jump": true}, "1": {}}`. Keys are agent
++//!   ids, values are [`Action`]s with all fields optional. Agents that are
++//!   omitted idle. `{}` advances one tick with every agent idle.
++//! - Commands: `{"cmd": "reset"}` or `{"cmd": "reset", "seed": 42}` restarts
++//!   the simulation (optionally with a new terrain seed) and returns the tick-0
++//!   observations.
++//!
++//! Responses:
++//! - Success: the JSON array of per-agent observations, ordered by agent id.
++//! - Failure: `{"error": "<message>"}`. A failed request never advances or
++//!   otherwise modifies the simulation.
++
++use crate::{Action, AgentId, Simulation};
++use serde_json::{json, Map, Value};
++use std::collections::HashMap;
++
++/// Handles one request line and returns the one-line JSON response.
++pub fn handle_line(sim: &mut Simulation, line: &str) -> String {
++    match process(sim, line) {
++        Ok(response) => response,
++        Err(message) => json!({ "error": message }).to_string(),
++    }
++}
++
++fn process(sim: &mut Simulation, line: &str) -> Result<String, String> {
++    let value: Value = serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
++    let object = value
++        .as_object()
++        .ok_or_else(|| "request must be a JSON object".to_string())?;
++
++    if let Some(cmd) = object.get("cmd") {
++        return command(sim, object, cmd);
++    }
++
++    // Validate every action before stepping so a bad request has no effect.
++    let mut actions: HashMap<AgentId, Action> = HashMap::new();
++    for (key, raw) in object {
++        let id: AgentId = key
++            .parse()
++            .map_err(|_| format!("invalid agent id {key:?}: expected a non-negative integer"))?;
++        if id >= sim.config.agent_count {
++            return Err(format!(
++                "unknown agent id {id}: this simulation has {} agents (ids 0..{})",
++                sim.config.agent_count,
++                sim.config.agent_count.saturating_sub(1)
++            ));
++        }
++        let action: Action = serde_json::from_value(raw.clone())
++            .map_err(|e| format!("invalid action for agent {id}: {e}"))?;
++        actions.insert(id, action);
++    }
++
++    to_json(&sim.step(&actions))
++}
++
++fn command(sim: &mut Simulation, object: &Map<String, Value>, cmd: &Value) -> Result<String, String> {
++    match cmd.as_str() {
++        Some("reset") => {
++            let mut config = sim.config;
++            if let Some(seed) = object.get("seed") {
++                config.seed = seed
++                    .as_u64()
++                    .and_then(|s| u32::try_from(s).ok())
++                    .ok_or_else(|| "seed must be an integer in 0..=4294967295".to_string())?;
++            }
++            *sim = Simulation::new(config);
++            to_json(&sim.observations())
++        }
++        Some(other) => Err(format!("unknown command {other:?} (supported: \"reset\")")),
++        None => Err("\"cmd\" must be a string".to_string()),
++    }
++}
++
++/// Serialises directly (not via `serde_json::Value`) so successful responses
++/// keep struct field order and `f32` formatting identical to the original
++/// headless output.
++fn to_json<T: serde::Serialize>(value: &T) -> Result<String, String> {
++    serde_json::to_string(value).map_err(|e| format!("failed to serialize response: {e}"))
++}
+diff --git a/crates/nullscape-core/src/simulation.rs b/crates/nullscape-core/src/simulation.rs
+index 8619984..9430465 100644
+--- a/crates/nullscape-core/src/simulation.rs
++++ b/crates/nullscape-core/src/simulation.rs
+@@ -3,6 +3,10 @@ use glam::{Vec3, EulerRot, Quat};
+ use serde::{Deserialize, Serialize};
+ use std::collections::HashMap;
+ 
++/// How far above the terrain surface a descending agent still counts as
++/// standing on it. Lets agents walk down slopes without flickering airborne.
++const GROUND_SNAP: f32 = 0.1;
++
+ #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+ pub struct SimulationConfig {
+     pub seed: u32,
+@@ -40,7 +44,7 @@ pub struct Simulation {
+ 
+ impl Simulation {
+     pub fn new(config: SimulationConfig) -> Self {
+-        let mut world = World::new(config.seed, 2);
++        let world = World::new(config.seed, 2);
+         let mut agents = HashMap::new();
+         for id in 0..config.agent_count {
+             let x = id as f32 * 3.0;
+@@ -72,11 +76,19 @@ impl Simulation {
+             agent.velocity.y -= self.config.gravity * dt;
+             agent.position += agent.velocity * dt;
+ 
++            // `on_ground` is recomputed every tick. Previously it was only ever
++            // cleared by jumping, so walking off a ledge left it stuck at true
++            // (air-jumps, wrong observations).
+             let ground = self.world.height_at(agent.position.x, agent.position.z) + 1.0;
+-            if agent.position.y <= ground {
++            let penetrating = agent.position.y <= ground;
++            let resting_or_descending_near_ground =
++                agent.velocity.y <= 0.0 && agent.position.y <= ground + GROUND_SNAP;
++            if penetrating || resting_or_descending_near_ground {
+                 agent.position.y = ground;
+                 agent.velocity.y = 0.0;
+                 agent.on_ground = true;
++            } else {
++                agent.on_ground = false;
+             }
+ 
+             if action.attack {
+@@ -137,8 +149,7 @@ impl Simulation {
+     }
+ 
+     fn terrain_height(&self, x: f32, z: f32) -> f32 {
+-        let mut world = World::new(self.config.seed, 0);
+-        world.height_at(x, z)
++        self.world.height_at(x, z)
+     }
+ 
+     pub fn deterministic_fingerprint(&self) -> String {
+diff --git a/crates/nullscape-core/src/world.rs b/crates/nullscape-core/src/world.rs
+index 94b45d6..e8ff1cf 100644
+--- a/crates/nullscape-core/src/world.rs
++++ b/crates/nullscape-core/src/world.rs
+@@ -41,40 +41,46 @@ impl World {
+         self.chunks.retain(|(x, z), _| (x - cx).abs() <= r && (z - cz).abs() <= r);
+     }
+ 
++    /// Terrain height at an integer lattice point. This is the single source of
++    /// truth for terrain: chunk generation and `height_at` both sample it, so
++    /// the surface cannot disagree with itself across chunk borders.
++    fn corner_height(&self, ix: i32, iz: i32) -> f32 {
++        let wx = ix as f64;
++        let wz = iz as f64;
++        let base = self.noise.get([wx * WORLD_SCALE, wz * WORLD_SCALE]) as f32;
++        let detail = self.noise.get([wx * WORLD_SCALE * 3.0, wz * WORLD_SCALE * 3.0]) as f32;
++        (base * 0.7 + detail * 0.3) * HEIGHT_SCALE
++    }
++
+     fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
+         let mut heights = vec![0.0; (CHUNK_SIZE * CHUNK_SIZE) as usize];
+         for z in 0..CHUNK_SIZE {
+             for x in 0..CHUNK_SIZE {
+-                let wx = (cx * CHUNK_SIZE + x) as f64;
+-                let wz = (cz * CHUNK_SIZE + z) as f64;
+-                let base = self.noise.get([wx * WORLD_SCALE, wz * WORLD_SCALE]) as f32;
+-                let detail = self.noise.get([wx * WORLD_SCALE * 3.0, wz * WORLD_SCALE * 3.0]) as f32;
+-                heights[(z * CHUNK_SIZE + x) as usize] = (base * 0.7 + detail * 0.3) * HEIGHT_SCALE;
++                heights[(z * CHUNK_SIZE + x) as usize] =
++                    self.corner_height(cx * CHUNK_SIZE + x, cz * CHUNK_SIZE + z);
+             }
+         }
+         Chunk { coord: (cx, cz), heights }
+     }
+ 
+-    pub fn height_at(&mut self, x: f32, z: f32) -> f32 {
+-        let cx = (x / CHUNK_SIZE as f32).floor() as i32;
+-        let cz = (z / CHUNK_SIZE as f32).floor() as i32;
+-        let lx = x - cx as f32 * CHUNK_SIZE as f32;
+-        let lz = z - cz as f32 * CHUNK_SIZE as f32;
+-        if !self.chunks.contains_key(&(cx, cz)) {
+-            let chunk = self.generate_chunk(cx, cz);
+-            self.chunks.insert((cx, cz), chunk);
+-        }
+-        let chunk = self.chunks.get(&(cx, cz)).expect("chunk exists");
+-        let x0 = lx.floor().clamp(0.0, (CHUNK_SIZE - 1) as f32) as usize;
+-        let z0 = lz.floor().clamp(0.0, (CHUNK_SIZE - 1) as f32) as usize;
+-        let x1 = (x0 + 1).min((CHUNK_SIZE - 1) as usize);
+-        let z1 = (z0 + 1).min((CHUNK_SIZE - 1) as usize);
+-        let tx = lx.fract();
+-        let tz = lz.fract();
+-        let h00 = chunk.heights[z0 * CHUNK_SIZE as usize + x0];
+-        let h10 = chunk.heights[z0 * CHUNK_SIZE as usize + x1];
+-        let h01 = chunk.heights[z1 * CHUNK_SIZE as usize + x0];
+-        let h11 = chunk.heights[z1 * CHUNK_SIZE as usize + x1];
++    /// Bilinearly interpolated terrain height.
++    ///
++    /// Samples the four surrounding lattice corners directly instead of
++    /// reading a cached chunk, so the surface is continuous across chunk
++    /// borders. It needs no chunk cache, which makes it `&self`, cheap
++    /// (4 corner samples instead of generating a 32x32 chunk), and free of
++    /// side effects on the streaming state.
++    pub fn height_at(&self, x: f32, z: f32) -> f32 {
++        let fx = x.floor();
++        let fz = z.floor();
++        let tx = x - fx;
++        let tz = z - fz;
++        let ix = fx as i32;
++        let iz = fz as i32;
++        let h00 = self.corner_height(ix, iz);
++        let h10 = self.corner_height(ix.saturating_add(1), iz);
++        let h01 = self.corner_height(ix, iz.saturating_add(1));
++        let h11 = self.corner_height(ix.saturating_add(1), iz.saturating_add(1));
+         h00.lerp(h10, tx).lerp(h01.lerp(h11, tx), tz)
+     }
+ 
+diff --git a/crates/nullscape-core/tests/determinism.rs b/crates/nullscape-core/tests/determinism.rs
+index 9eec456..422b170 100644
+--- a/crates/nullscape-core/tests/determinism.rs
++++ b/crates/nullscape-core/tests/determinism.rs
+@@ -19,8 +19,8 @@ fn same_seed_and_actions_are_identical() {
+ 
+ #[test]
+ fn different_seeds_change_terrain() {
+-    let mut a = Simulation::new(SimulationConfig { seed: 1, ..Default::default() });
+-    let mut b = Simulation::new(SimulationConfig { seed: 2, ..Default::default() });
++    let a = Simulation::new(SimulationConfig { seed: 1, ..Default::default() });
++    let b = Simulation::new(SimulationConfig { seed: 2, ..Default::default() });
+     let ha = a.world.height_at(12.5, -7.25);
+     let hb = b.world.height_at(12.5, -7.25);
+     assert_ne!(ha, hb);
+diff --git a/crates/nullscape-core/tests/grounding.rs b/crates/nullscape-core/tests/grounding.rs
+new file mode 100644
+index 0000000..b18003c
+--- /dev/null
++++ b/crates/nullscape-core/tests/grounding.rs
+@@ -0,0 +1,59 @@
++use nullscape_core::{Action, Simulation, SimulationConfig};
++use std::collections::HashMap;
++
++fn act(a: Action) -> HashMap<u32, Action> {
++    let mut m = HashMap::new();
++    m.insert(0, a);
++    m
++}
++
++/// `on_ground` must always agree with where the agent actually is.
++#[test]
++fn on_ground_flag_matches_reality_while_walking() {
++    for seed in [1337u32, 1, 2, 3] {
++        let mut sim = Simulation::new(SimulationConfig { seed, ..Default::default() });
++        for i in 0..4000 {
++            // wander with a slow turn so we cross lots of terrain, with some jumping
++            let a = Action { move_z: -1.0, yaw_delta: 0.01, jump: i % 97 == 0, ..Default::default() };
++            let o = sim.step(&act(a)).remove(0);
++            let ground = o.terrain_height + 1.0;
++            let height_above = o.position[1] - ground;
++            if o.on_ground {
++                assert!(height_above.abs() < 1e-4,
++                    "seed {seed} tick {i}: on_ground but {height_above} above terrain");
++            } else {
++                assert!(height_above > 0.0,
++                    "seed {seed} tick {i}: airborne flag but {height_above} above terrain");
++            }
++        }
++    }
++}
++
++/// Regression test: `on_ground` used to stay `true` after walking off a ledge
++/// (it was only ever cleared by jumping), which allowed jumping in mid-air.
++#[test]
++fn cannot_jump_after_leaving_the_ground() {
++    let mut sim = Simulation::new(SimulationConfig::default());
++    sim.step(&act(Action::default())); // settle on the ground
++    sim.agents.get_mut(&0).unwrap().position.y += 5.0; // ground suddenly 5 below
++    let o = sim.step(&act(Action::default())).remove(0);
++    assert!(!o.on_ground, "agent 5 units above terrain reported on_ground");
++    let o = sim.step(&act(Action { jump: true, ..Default::default() })).remove(0);
++    assert!(!o.on_ground);
++    assert!(o.velocity[1] < 0.0, "mid-air jump gave vy = {}", o.velocity[1]);
++}
++
++#[test]
++fn can_still_jump_from_the_ground_and_land_again() {
++    let mut sim = Simulation::new(SimulationConfig::default());
++    let o = sim.step(&act(Action::default())).remove(0);
++    assert!(o.on_ground);
++    let o = sim.step(&act(Action { jump: true, ..Default::default() })).remove(0);
++    assert!(!o.on_ground);
++    assert!(o.velocity[1] > 0.0);
++    let mut landed = false;
++    for _ in 0..120 {
++        if sim.step(&act(Action::default())).remove(0).on_ground { landed = true; break; }
++    }
++    assert!(landed, "agent never landed");
++}
+diff --git a/crates/nullscape-core/tests/protocol.rs b/crates/nullscape-core/tests/protocol.rs
+new file mode 100644
+index 0000000..85bc92b
+--- /dev/null
++++ b/crates/nullscape-core/tests/protocol.rs
+@@ -0,0 +1,147 @@
++use nullscape_core::protocol::handle_line;
++use nullscape_core::{Simulation, SimulationConfig};
++use serde_json::Value;
++use std::io::{BufRead, BufReader, Write};
++use std::process::{Command, Stdio};
++
++fn sim() -> Simulation {
++    Simulation::new(SimulationConfig::default())
++}
++
++fn call(sim: &mut Simulation, line: &str) -> Value {
++    serde_json::from_str(&handle_line(sim, line)).expect("response must be valid JSON")
++}
++
++fn is_error(v: &Value) -> bool {
++    v.get("error").is_some()
++}
++
++#[test]
++fn partial_actions_default_missing_fields() {
++    let mut s = sim();
++    let r = call(&mut s, r#"{"0":{"jump":true}}"#);
++    assert!(!is_error(&r), "{r}");
++    assert_eq!(r[0]["tick"], 1);
++    assert_eq!(r.as_array().unwrap().len(), 2);
++}
++
++#[test]
++fn empty_object_advances_one_tick() {
++    let mut s = sim();
++    assert_eq!(call(&mut s, "{}")[0]["tick"], 1);
++}
++
++#[test]
++fn invalid_requests_return_errors_and_do_not_advance() {
++    let mut s = sim();
++    for bad in [
++        "not json",
++        "",
++        "[1,2,3]",
++        r#"{"0":{"jmp":true}}"#,          // typo'd field
++        r#"{"0":{"move_x":"left"}}"#,     // wrong type
++        r#"{"7":{}}"#,                    // unknown agent
++        r#"{"zero":{}}"#,                 // non-numeric id
++        r#"{"-1":{}}"#,                   // negative id
++        r#"{"cmd":"explode"}"#,           // unknown command
++        r#"{"cmd":5}"#,                   // cmd not a string
++        r#"{"cmd":"reset","seed":-1}"#,
++        r#"{"cmd":"reset","seed":4294967296}"#,
++        r#"{"cmd":"reset","seed":"x"}"#,
++    ] {
++        let r = call(&mut s, bad);
++        assert!(is_error(&r), "expected error for {bad:?}, got {r}");
++    }
++    assert_eq!(s.tick, 0, "failed requests must not advance the simulation");
++    assert_eq!(call(&mut s, "{}")[0]["tick"], 1, "a valid request still works afterwards");
++}
++
++#[test]
++fn one_bad_agent_action_prevents_the_whole_step() {
++    let mut s = sim();
++    let r = call(&mut s, r#"{"0":{"jump":true},"1":{"nope":1}}"#);
++    assert!(is_error(&r));
++    assert_eq!(s.tick, 0);
++}
++
++#[test]
++fn error_messages_are_helpful() {
++    let mut s = sim();
++    let r = call(&mut s, r#"{"0":{"jmp":true}}"#);
++    let msg = r["error"].as_str().unwrap();
++    assert!(msg.contains("jmp") && msg.contains("agent 0"), "{msg}");
++    let r = call(&mut s, r#"{"5":{}}"#);
++    assert!(r["error"].as_str().unwrap().contains("unknown agent id 5"));
++}
++
++#[test]
++fn reset_restores_tick_zero_and_matches_a_fresh_simulation() {
++    let mut s = sim();
++    for _ in 0..30 {
++        call(&mut s, r#"{"0":{"move_z":-1.0}}"#);
++    }
++    let raw = handle_line(&mut s, r#"{"cmd":"reset","seed":42}"#);
++    let fresh = Simulation::new(SimulationConfig { seed: 42, ..Default::default() });
++    // byte-identical to a freshly constructed simulation's observations
++    assert_eq!(raw, fresh.deterministic_fingerprint());
++    let r: Value = serde_json::from_str(&raw).unwrap();
++    assert_eq!(r[0]["tick"], 0);
++
++    // reset without a seed keeps the current one
++    call(&mut s, "{}");
++    let raw = handle_line(&mut s, r#"{"cmd":"reset"}"#);
++    assert_eq!(raw, fresh.deterministic_fingerprint());
++}
++
++#[test]
++fn success_responses_use_the_original_wire_format() {
++    // Field order follows the struct definition and f32 values print in their
++    // shortest form, exactly as the pre-protocol-module binary did.
++    let mut s = sim();
++    let raw = handle_line(&mut s, "{}");
++    assert!(raw.starts_with(r#"[{"tick":1,"agent_id":0,"position":["#), "{raw}");
++}
++
++/// End to end through the real binary: N request lines in => exactly N
++/// response lines out, no matter how many of them are invalid. This is the
++/// property that used to hang the Python client.
++#[test]
++fn binary_replies_once_per_line_even_for_bad_input() {
++    let mut child = Command::new(env!("CARGO_BIN_EXE_nullscape-headless"))
++        .stdin(Stdio::piped())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::null())
++        .spawn()
++        .expect("spawn headless binary");
++
++    let requests = [
++        r#"{"0":{"move_z":-1.0}}"#,
++        "this is not json",
++        r#"{"0":{"jump":true}}"#, // partial action: used to be rejected silently
++        "",
++        r#"{"cmd":"reset","seed":5}"#,
++        r#"{"1":{"attack":true}}"#,
++    ];
++    {
++        let stdin = child.stdin.as_mut().unwrap();
++        for r in requests {
++            writeln!(stdin, "{r}").unwrap();
++        }
++    }
++    drop(child.stdin.take()); // EOF => binary exits
++
++    let lines: Vec<String> = BufReader::new(child.stdout.take().unwrap())
++        .lines()
++        .map(|l| l.unwrap())
++        .collect();
++    child.wait().unwrap();
++
++    assert_eq!(lines.len(), requests.len(), "responses: {lines:#?}");
++    let parsed: Vec<Value> = lines.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
++    assert!(!is_error(&parsed[0]));
++    assert!(is_error(&parsed[1]));
++    assert!(!is_error(&parsed[2]));
++    assert!(is_error(&parsed[3]));
++    assert_eq!(parsed[4][0]["tick"], 0);
++    assert_eq!(parsed[5][0]["tick"], 1);
++}
+diff --git a/crates/nullscape-core/tests/terrain.rs b/crates/nullscape-core/tests/terrain.rs
+new file mode 100644
+index 0000000..fdf9f4c
+--- /dev/null
++++ b/crates/nullscape-core/tests/terrain.rs
+@@ -0,0 +1,59 @@
++use nullscape_core::world::{World, CHUNK_SIZE};
++
++/// The terrain must be continuous everywhere, including across chunk borders.
++/// Before the fix there was a ~1.0 unit step at every border (the last cell of
++/// a chunk was not interpolated towards the next chunk).
++#[test]
++fn terrain_is_continuous_across_chunk_borders() {
++    let w = World::new(1337, 2);
++    let eps = 0.001;
++    let mut worst = 0.0f32;
++    for k in -20..20 {
++        let border = (k * CHUNK_SIZE) as f32;
++        for &z in &[-37.25, 0.0, 5.0, 19.9, 63.5] {
++            let jump = (w.height_at(border - eps, z) - w.height_at(border + eps, z)).abs();
++            worst = worst.max(jump);
++        }
++        // and across z borders
++        for &x in &[-12.5, 3.0, 41.75] {
++            let jump = (w.height_at(x, border - eps) - w.height_at(x, border + eps)).abs();
++            worst = worst.max(jump);
++        }
++    }
++    // Max terrain slope is well under 1 unit/unit; 0.002 apart => < 0.01.
++    assert!(worst < 0.01, "step of {worst} across a chunk border");
++}
++
++#[test]
++fn height_at_matches_generated_chunk_cells() {
++    let mut w = World::new(99, 1);
++    w.stream_around(glam::Vec3::ZERO);
++    let chunks: Vec<_> = w.chunks().cloned().collect();
++    assert!(!chunks.is_empty());
++    for c in chunks {
++        for &(lx, lz) in &[(0, 0), (5, 9), (31, 31), (17, 2)] {
++            let x = (c.coord.0 * CHUNK_SIZE + lx) as f32;
++            let z = (c.coord.1 * CHUNK_SIZE + lz) as f32;
++            let cell = c.heights[(lz * CHUNK_SIZE + lx) as usize];
++            assert!((w.height_at(x, z) - cell).abs() < 1e-5);
++        }
++    }
++}
++
++#[test]
++fn height_at_has_no_side_effects_and_is_repeatable() {
++    let w = World::new(7, 1);
++    assert_eq!(w.chunks().count(), 0);
++    let a = w.height_at(-123.4, 987.6);
++    let b = w.height_at(-123.4, 987.6);
++    assert_eq!(a, b);
++    assert_eq!(w.chunks().count(), 0, "height_at must not populate the chunk cache");
++}
++
++#[test]
++fn extreme_coordinates_do_not_panic() {
++    let w = World::new(1, 1);
++    for &v in &[f32::MAX, f32::MIN, 3.0e9, -3.0e9] {
++        let _ = w.height_at(v, v);
++    }
++}
+-- 
+2.43.0
+
