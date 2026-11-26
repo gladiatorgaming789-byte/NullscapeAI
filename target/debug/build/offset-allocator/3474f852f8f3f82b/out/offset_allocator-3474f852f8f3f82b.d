@@ -1,0 +1,10 @@
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\offset-allocator/3474f852f8f3f82b\out\offset_allocator-3474f852f8f3f82b.d: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\ext.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\small_float.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\../README.md
+
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\offset-allocator/3474f852f8f3f82b\out\liboffset_allocator-3474f852f8f3f82b.rlib: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\ext.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\small_float.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\../README.md
+
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\offset-allocator/3474f852f8f3f82b\out\liboffset_allocator-3474f852f8f3f82b.rmeta: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\ext.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\small_float.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\../README.md
+
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\lib.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\ext.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\small_float.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\offset-allocator-0.2.0\src\../README.md:

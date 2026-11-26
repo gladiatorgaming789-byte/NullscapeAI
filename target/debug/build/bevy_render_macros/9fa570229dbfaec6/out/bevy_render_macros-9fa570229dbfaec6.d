@@ -1,0 +1,8 @@
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\bevy_render_macros/9fa570229dbfaec6\out\bevy_render_macros-9fa570229dbfaec6.d: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\as_bind_group.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_component.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_resource.rs
+
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\bevy_render_macros/9fa570229dbfaec6\out\bevy_render_macros-9fa570229dbfaec6.dll: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\as_bind_group.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_component.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_resource.rs
+
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\lib.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\as_bind_group.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_component.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\bevy_render_macros-0.15.3\src\extract_resource.rs:

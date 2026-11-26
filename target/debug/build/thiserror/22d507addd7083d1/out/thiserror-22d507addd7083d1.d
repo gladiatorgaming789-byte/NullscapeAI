@@ -1,0 +1,14 @@
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/22d507addd7083d1\out\thiserror-22d507addd7083d1.d: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\aserror.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\display.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\var.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\private.rs C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/6eb06d4a8ce4b98b\out/private.rs
+
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/22d507addd7083d1\out\libthiserror-22d507addd7083d1.rlib: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\aserror.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\display.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\var.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\private.rs C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/6eb06d4a8ce4b98b\out/private.rs
+
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/22d507addd7083d1\out\libthiserror-22d507addd7083d1.rmeta: C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\lib.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\aserror.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\display.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\var.rs C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\private.rs C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/6eb06d4a8ce4b98b\out/private.rs
+
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\lib.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\aserror.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\display.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\var.rs:
+C:\Users\Gladi\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\thiserror-2.0.21\src\private.rs:
+C:\Users\Gladi\Desktop\NullscapeAI\target\debug\build\thiserror/6eb06d4a8ce4b98b\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\Gladi\\Desktop\\NullscapeAI\\target\\debug\\build\\thiserror/6eb06d4a8ce4b98b\\out
